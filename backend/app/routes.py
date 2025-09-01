@@ -1,6 +1,6 @@
-from flask import request, jsonify, Blueprint, redirect , url_for
+from flask import request, jsonify, Blueprint, redirect , url_for, make_response
 from .models import Courses, Questions, CreateUser
-from .extensions import db, jwt, create_refresh_token, create_access_token, get_jwt_identity, jwt_required
+from .extensions import db, jwt, create_refresh_token, create_access_token, get_jwt_identity, jwt_required, set_refresh_cookies, set_access_cookies, unset_jwt_cookies
 # from flask_dance.contrib.google import google, make_google_blueprint
 main_bp = Blueprint("main_bp", __name__)
 
@@ -40,13 +40,13 @@ def expired_token_callback(jwt_header, jwt_payload):
     return jsonify({"message": "TOKEN_EXPIRED"}), 401
 
 # Agar token missing ho
-@jwt.unauthorized_loader
-def missing_token_callback(err):
-    return jsonify({"message": "Missing Authorization Header"}), 401
+# @jwt.unauthorized_loader
+# def missing_token_callback(err):
+#     return jsonify({"message": "Missing Authorization Header"}), 401
 
-@jwt.invalid_token_loader
-def invalid_token_callback(err):
-    return jsonify({"message": "Invalid Token"}), 422
+# @jwt.invalid_token_loader
+# def invalid_token_callback(err):
+#     return jsonify({"message": "Invalid Token"}), 422
 
 # ✅ Add Course
 @main_bp.route("/setCourses", methods=["POST"], endpoint="setting_course")
@@ -233,7 +233,9 @@ def deleteUser(email):
     return jsonify({"message": f"User {email} deleted successfully!"}), 200
 
 # ✅ Login User
-@main_bp.route("/login", methods=["POST"], endpoint="login_user")
+from flask_jwt_extended import create_access_token, create_refresh_token, set_access_cookies, set_refresh_cookies
+
+@main_bp.route("/login", methods=["POST"])
 def loginUser():
     data = request.get_json()
     email = data.get("email")
@@ -242,30 +244,43 @@ def loginUser():
     if not email or not password:
         return jsonify({"message": "Email and Password are required"}), 400
     
-    user = CreateUser.query.filter_by(email = email).first()
-
+    user = CreateUser.query.filter_by(email=email).first()
     if not user:
-        return jsonify({"message" : "Create Account First"})
+        return jsonify({"message": "Create Account First"}), 404
 
     if user and user.check_password(password):
-        accessToken = create_access_token(
-        identity=data.get("email")
-        )
-        refreshToken = create_refresh_token(identity=data.get("email"))
-        return jsonify({
-            "message" : "User registered successfully",
-            "token" : {"accessToken" : accessToken, "refreshToken" : refreshToken},
-            "user" : {
-                "name" : user.name,
-                "email" : user.email
+        accessToken = create_access_token(identity=user.email)
+        refreshToken = create_refresh_token(identity=user.email)
+
+        response = jsonify({
+            "message": "Login successful",
+            "user": {
+                "name": user.name,
+                "email": user.email
             }
         })
+
+        # ✅ ye JWT ko sahi cookie me set karega (access_token_cookie, refresh_token_cookie)
+        set_access_cookies(response, accessToken)
+        set_refresh_cookies(response, refreshToken)
+
+        return response
     else:
-        return jsonify({"message" : "INVALID CREDENTIALS"})
+        return jsonify({"message": "INVALID CREDENTIALS"}), 401
+
+@main_bp.route("/logout", methods=["POST"])
+@jwt_required()
+def logout():
+    response = jsonify({"message" : "Logout successfully"})
+    unset_jwt_cookies(response)
+    return response    
     
 @main_bp.route("/refresh", methods=["POST"])
 @jwt_required(refresh=True)
 def refreshToken():
     identity = get_jwt_identity()
     new_access = create_access_token(identity=identity)
-    return jsonify({"access" : new_access}), 200
+    
+    response = jsonify({"message" : "Access Token Refreshed"})
+    set_access_cookies(response, new_access)
+    return response
